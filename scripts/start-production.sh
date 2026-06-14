@@ -12,7 +12,7 @@ fi
 
 npm ci
 npm run prisma:generate
-npm run prisma:migrate -- --name init
+npm run prisma:deploy
 npm run seed
 npm run build
 

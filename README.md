@@ -86,6 +86,8 @@ UPLOAD_DIR=uploads
 bash scripts/start-production.sh
 ```
 
+生产脚本会执行 `prisma migrate deploy`，不会创建 shadow database，因此数据库用户不需要 `CREATEDB` 权限。若之前用旧脚本遇到 `P3014 permission denied to create database`，更新代码后直接重新运行上面的命令即可。
+
 4. 配置 Nginx：
 
 ```bash

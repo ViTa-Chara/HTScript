@@ -12,6 +12,7 @@
     "start": "npm run start -w apps/backend",
     "prisma:generate": "npm run prisma:generate -w apps/backend",
     "prisma:migrate": "npm run prisma:migrate -w apps/backend",
+    "prisma:deploy": "npm run prisma:deploy -w apps/backend",
     "seed": "npm run seed -w apps/backend"
   },
   "devDependencies": {
