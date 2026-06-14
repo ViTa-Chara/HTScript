@@ -115,6 +115,14 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function deriveFrameEnds(frames: StoryboardFrame[], duration: number) {
+  const sorted = [...frames].sort((a, b) => a.startMs - b.startMs);
+  return sorted.map((frame, index) => ({
+    ...frame,
+    endMs: sorted[index + 1]?.startMs ?? duration
+  }));
+}
+
 export function Editor({ projectId, onBack }: { projectId: string; onBack: () => void }) {
   const { token, user } = useAuth();
   const [project, setProject] = useState<Project | null>(null);
@@ -138,6 +146,7 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [stageSize, setStageSize] = useState({ width: 960, height: 540 });
+  const [audioDurationMs, setAudioDurationMs] = useState(0);
   const socketRef = useRef<Socket | null>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const stageWrapRef = useRef<HTMLDivElement>(null);
@@ -152,20 +161,26 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
     () => [...document.frames].sort((a, b) => a.startMs - b.startMs),
     [document.frames]
   );
+  const rawFrameMaxMs = Math.max(0, ...orderedFrames.map((frame) => Math.max(frame.startMs, frame.endMs)));
+  const duration = Math.max(10000, audioDurationMs, rawFrameMaxMs);
+  const displayFrames = useMemo(
+    () => deriveFrameEnds(orderedFrames, duration),
+    [orderedFrames, duration]
+  );
   const activeFrame = useMemo(
-    () => orderedFrames.find((frame) => frame.id === activeFrameId) ?? orderedFrames[0],
-    [orderedFrames, activeFrameId]
+    () => displayFrames.find((frame) => frame.id === activeFrameId) ?? displayFrames[0],
+    [displayFrames, activeFrameId]
   );
   const selectedElement = useMemo(
     () => activeFrame?.elements.find((element) => element.id === selectedElementId) ?? null,
     [activeFrame?.elements, selectedElementId]
   );
 
-  const duration = Math.max(10000, ...orderedFrames.map((frame) => frame.endMs));
   const canvasScale = Math.min(stageSize.width / CANVAS_WIDTH, stageSize.height / CANVAS_HEIGHT);
   const stageWidth = Math.round(CANVAS_WIDTH * canvasScale);
   const stageHeight = Math.round(CANVAS_HEIGHT * canvasScale);
   const playheadPercent = clamp((currentMs / duration) * 100, 0, 100);
+  const timelineContentWidth = Math.max(980, Math.ceil(duration / 1000) * 52);
 
   const load = async () => {
     setLoading(true);
@@ -275,11 +290,11 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
   }, [playing, duration, playbackStartedAt]);
 
   useEffect(() => {
-    const frameAtPlayhead = orderedFrames.find((frame) => currentMs >= frame.startMs && currentMs < frame.endMs);
+    const frameAtPlayhead = displayFrames.find((frame) => currentMs >= frame.startMs && currentMs < frame.endMs);
     if (frameAtPlayhead && frameAtPlayhead.id !== activeFrameId && playing) {
       setActiveFrameId(frameAtPlayhead.id);
     }
-  }, [currentMs, orderedFrames, playing, activeFrameId]);
+  }, [currentMs, displayFrames, playing, activeFrameId]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -332,11 +347,7 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
   };
 
   const withAutoEnds = (frames: StoryboardFrame[]) => {
-    const sorted = [...frames].sort((a, b) => a.startMs - b.startMs);
-    return sorted.map((frame, index) => ({
-      ...frame,
-      endMs: sorted[index + 1]?.startMs ?? duration
-    }));
+    return deriveFrameEnds(frames, duration);
   };
 
   const updateFrame = (frame: StoryboardFrame, summary = "Updated frame") => {
@@ -495,13 +506,14 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
     form.append("audio", file);
     const { data } = await api.post(`/projects/${projectId}/audio`, form);
     setProject(data.project);
+    setAudioDurationMs(0);
   };
 
   const addFrame = () => {
     const startMs = clamp(Math.round(currentMs), 0, duration - 1);
     const sourceFrame =
-      orderedFrames.find((frame) => startMs >= frame.startMs && startMs < frame.endMs) ??
-      orderedFrames[orderedFrames.length - 1];
+      displayFrames.find((frame) => startMs >= frame.startMs && startMs < frame.endMs) ??
+      displayFrames[displayFrames.length - 1];
     if (sourceFrame && Math.abs(sourceFrame.startMs - startMs) < 1) {
       setActiveFrameId(sourceFrame.id);
       return;
@@ -510,7 +522,7 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
       id: uid("frame"),
       startMs,
       endMs: duration,
-      title: `Shot ${orderedFrames.length + 1}`,
+      title: `Shot ${displayFrames.length + 1}`,
       notes: sourceFrame?.notes ?? "",
       elements: sourceFrame ? structuredClone(sourceFrame.elements) : []
     };
@@ -566,8 +578,8 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
   const activeFramePatch = (patch: Partial<StoryboardFrame>) => {
     if (!activeFrame) return;
     const next = { ...activeFrame, ...patch };
-    const previous = orderedFrames.filter((frame) => frame.id !== activeFrame.id && frame.startMs < next.startMs).at(-1);
-    const following = orderedFrames.find((frame) => frame.id !== activeFrame.id && frame.startMs > next.startMs);
+    const previous = displayFrames.filter((frame) => frame.id !== activeFrame.id && frame.startMs < next.startMs).at(-1);
+    const following = displayFrames.find((frame) => frame.id !== activeFrame.id && frame.startMs > next.startMs);
     next.startMs = clamp(next.startMs, (previous?.startMs ?? -1) + 1, (following?.startMs ?? duration + 1) - 1);
     updateFrame(next, "Updated timing");
   };
@@ -594,7 +606,7 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
     playbackBaseMsRef.current = safe;
     setCurrentMs(safe);
     setPlaybackStartedAt(Date.now());
-    const frame = orderedFrames.find((item) => safe >= item.startMs && safe < item.endMs);
+    const frame = displayFrames.find((item) => safe >= item.startMs && safe < item.endMs);
     if (frame) setActiveFrameId(frame.id);
     if (audioRef.current) audioRef.current.currentTime = safe / 1000;
     broadcastPlayback(keepPlaying, safe);
@@ -797,6 +809,12 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
                 ref={audioRef}
                 controls
                 src={project.audioPath}
+                onLoadedMetadata={(event) => {
+                  const nextDuration = Math.round(event.currentTarget.duration * 1000);
+                  if (Number.isFinite(nextDuration) && nextDuration > 0) {
+                    setAudioDurationMs(nextDuration);
+                  }
+                }}
                 onPlay={() => {
                   if (!suppressAudioEventRef.current && !playing) togglePlayback();
                 }}
@@ -807,33 +825,35 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
             )}
           </div>
           <div className="timeline-board">
-            <div className="timeline-ruler">
-              {Array.from({ length: 11 }).map((_, index) => (
-                <span key={index} style={{ left: `${index * 10}%` }}>{formatTime((duration * index) / 10)}</span>
-              ))}
-            </div>
-            <div className="timeline-track" ref={timelineTrackRef} onClick={seekFromTimeline}>
-              <div className="timeline-playhead" style={{ left: `${playheadPercent}%` }} />
-              {orderedFrames.map((frame, index) => (
-                <button
-                  key={frame.id}
-                  className={frame.id === activeFrame.id ? "timeline-clip active" : "timeline-clip"}
-                  style={{
-                    left: `${(frame.startMs / duration) * 100}%`,
-                    width: `${Math.max(3, ((frame.endMs - frame.startMs) / duration) * 100)}%`,
-                    "--clip-color": `var(--shot-${(index % 6) + 1})`
-                  } as CSSProperties}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setActiveFrameId(frame.id);
-                    seekTo(frame.startMs, false);
-                  }}
-                  title={`${frame.startMs}ms - ${frame.endMs}ms`}
-                >
-                  <strong>{frame.title}</strong>
-                  <span>{formatTime(frame.startMs)} - {formatTime(frame.endMs)}</span>
-                </button>
-              ))}
+            <div className="timeline-scroll">
+              <div className="timeline-ruler" style={{ width: timelineContentWidth }}>
+                {Array.from({ length: 11 }).map((_, index) => (
+                  <span key={index} style={{ left: `${index * 10}%` }}>{formatTime((duration * index) / 10)}</span>
+                ))}
+              </div>
+              <div className="timeline-track" ref={timelineTrackRef} onClick={seekFromTimeline} style={{ width: timelineContentWidth }}>
+                <div className="timeline-playhead" style={{ left: `${playheadPercent}%` }} />
+                {displayFrames.map((frame, index) => (
+                  <button
+                    key={frame.id}
+                    className={frame.id === activeFrame.id ? "timeline-clip active" : "timeline-clip"}
+                    style={{
+                      left: `${(frame.startMs / duration) * 100}%`,
+                      width: `${Math.max(3, ((frame.endMs - frame.startMs) / duration) * 100)}%`,
+                      "--clip-color": `var(--shot-${(index % 6) + 1})`
+                    } as CSSProperties}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setActiveFrameId(frame.id);
+                      seekTo(frame.startMs, false);
+                    }}
+                    title={`${frame.startMs}ms - ${frame.endMs}ms`}
+                  >
+                    <strong>{frame.title}</strong>
+                    <span>{formatTime(frame.startMs)} - {formatTime(frame.endMs)}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
