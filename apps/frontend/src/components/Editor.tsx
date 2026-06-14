@@ -68,6 +68,22 @@ function firstFrame(): StoryboardFrame {
   };
 }
 
+function normalizePoints(element: StoryboardElement) {
+  if (!element.points?.length) return element;
+  if (element.tool !== "movement") return element;
+  const [x1, y1, x2, y2] = element.points;
+  const minX = Math.min(x1, x2);
+  const minY = Math.min(y1, y2);
+  return {
+    ...element,
+    x: minX,
+    y: minY,
+    width: Math.max(24, Math.abs(x2 - x1)),
+    height: Math.max(24, Math.abs(y2 - y1)),
+    points: [x1 - minX, y1 - minY, x2 - minX, y2 - minY]
+  };
+}
+
 function ensureDocument(value: unknown): StoryboardDocument {
   const incoming = (value && typeof value === "object" ? value : defaultDocument) as Partial<StoryboardDocument>;
   const frames = Array.isArray(incoming.frames) && incoming.frames.length > 0 ? incoming.frames : [firstFrame()];
@@ -82,7 +98,7 @@ function ensureDocument(value: unknown): StoryboardDocument {
       ...frame,
       title: frame.title || "Untitled shot",
       notes: frame.notes ?? "",
-      elements: Array.isArray(frame.elements) ? frame.elements : []
+      elements: Array.isArray(frame.elements) ? frame.elements.map(normalizePoints) : []
     }))
   };
 }
@@ -366,9 +382,11 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
         id: uid("arrow"),
         type: "preset",
         tool: "movement",
-        x: 0,
-        y: 0,
-        points: [start.x, start.y, end.x, end.y],
+        x,
+        y,
+        width,
+        height,
+        points: [start.x - x, start.y - y, end.x - x, end.y - y],
         stroke,
         strokeWidth: Math.max(4, strokeWidth),
         preset: "pan"
@@ -469,7 +487,8 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
   };
 
   const addFrame = () => {
-    const startMs = activeFrame ? activeFrame.endMs : 0;
+    const byPlayhead = Math.round(currentMs);
+    const startMs = Math.max(activeFrame ? activeFrame.endMs : 0, byPlayhead);
     const frame: StoryboardFrame = {
       id: uid("frame"),
       startMs,
@@ -530,7 +549,14 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
 
   const activeFramePatch = (patch: Partial<StoryboardFrame>) => {
     if (!activeFrame) return;
-    updateFrame({ ...activeFrame, ...patch }, "Updated timing");
+    const next = { ...activeFrame, ...patch };
+    if (patch.startMs !== undefined && patch.endMs === undefined && next.endMs <= next.startMs) {
+      next.endMs = next.startMs + 3000;
+    }
+    if (patch.endMs !== undefined && next.endMs <= next.startMs) {
+      next.endMs = next.startMs + 1;
+    }
+    updateFrame(next, "Updated timing");
   };
 
   const togglePlayback = () => {
@@ -583,6 +609,18 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
 
   if (loading || !project || !activeFrame) return <div className="app-loading">加载编辑器...</div>;
 
+  if (!project.audioPath) {
+    return (
+      <div className="editor-error">
+        <div>
+          <h2>项目缺少音轨</h2>
+          <p>请 owner 或管理员先上传音轨。分镜时间轴必须绑定音轨后才能协作编辑。</p>
+          <button className="secondary-button" onClick={onBack}>返回项目</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <main className="editor-shell">
       <aside className="member-rail">
@@ -616,6 +654,7 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
       <section className="editor-main">
         <div className="tool-bar">
           <strong>{project.name}</strong>
+          <span className="frame-time-chip">{activeFrame.title} · {formatTime(activeFrame.startMs)} - {formatTime(activeFrame.endMs)}</span>
           <div className="tool-group">
             {tools.map((tool) => {
               const Icon = tool.icon;
@@ -686,6 +725,10 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
           </div>
           <aside className="inspector">
             <h3>{activeFrame.title}</h3>
+            <div className="audio-range">
+              <span>音轨位置</span>
+              <strong>{formatTime(activeFrame.startMs)} - {formatTime(activeFrame.endMs)}</strong>
+            </div>
             <label>标题<input value={activeFrame.title} onChange={(event) => activeFramePatch({ title: event.target.value })} /></label>
             <div className="inspector-grid">
               <label>开始 ms<input type="number" value={activeFrame.startMs} onChange={(event) => activeFramePatch({ startMs: Number(event.target.value) })} /></label>

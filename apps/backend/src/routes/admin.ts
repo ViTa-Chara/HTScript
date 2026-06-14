@@ -1,7 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import bcrypt from "bcryptjs";
 import { Router } from "express";
+import multer from "multer";
 import { z } from "zod";
 import { requireAdmin, requireAuth, requireOwner, splitIdentifier } from "../auth.js";
+import { config } from "../config.js";
 import { emptyDocument, toJson } from "../document.js";
 import { prisma } from "../db.js";
 
@@ -10,6 +14,26 @@ export const adminRouter = Router();
 adminRouter.use(requireAuth, requireAdmin);
 
 const param = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value ?? "");
+const uploadRoot = path.resolve(config.uploadDir);
+fs.mkdirSync(uploadRoot, { recursive: true });
+
+const audioUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, uploadRoot),
+    filename: (_req, file, cb) => {
+      const safe = file.originalname.replace(/[^\w.-]+/g, "_");
+      cb(null, `${Date.now()}-${safe}`);
+    }
+  }),
+  limits: { fileSize: 1024 * 1024 * 200 },
+  fileFilter: (_req, file, cb) => {
+    if (!file.mimetype.startsWith("audio/")) {
+      cb(new Error("创建项目必须上传音轨文件"));
+      return;
+    }
+    cb(null, true);
+  }
+});
 
 adminRouter.get("/users", async (_req, res) => {
   const users = await prisma.user.findMany({
@@ -57,16 +81,24 @@ adminRouter.get("/projects", async (_req, res) => {
   res.json({ projects });
 });
 
-adminRouter.post("/projects", async (req, res) => {
+adminRouter.post("/projects", requireOwner, audioUpload.single("audio"), async (req, res) => {
   const input = z.object({
     name: z.string().trim().min(1).max(120),
     description: z.string().trim().max(2000).optional()
   }).parse(req.body);
 
+  if (!req.file) {
+    return res.status(400).json({ message: "创建项目必须上传音轨" });
+  }
+
   const project = await prisma.project.create({
     data: {
       name: input.name,
       description: input.description ?? "",
+      audioPath: `/uploads/${req.file.filename}`,
+      audioFileName: req.file.originalname,
+      audioMime: req.file.mimetype,
+      audioSize: req.file.size,
       createdById: req.user!.id,
       document: toJson(emptyDocument()),
       members: {

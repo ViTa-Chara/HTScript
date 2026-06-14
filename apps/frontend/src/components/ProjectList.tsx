@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { ChangeEvent, FormEvent, useState } from "react";
 import { FolderPlus, Music, PencilLine, RefreshCw } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { zhCN } from "date-fns/locale";
@@ -17,28 +17,51 @@ export function ProjectList({
   onOpen: (projectId: string) => void;
 }) {
   const user = useAuth((state) => state.user);
-  const isAdmin = user?.role === "ADMIN" || user?.role === "OWNER";
+  const isOwner = user?.role === "OWNER";
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [error, setError] = useState("");
 
   const createProject = async (event: FormEvent) => {
     event.preventDefault();
-    await api.post("/admin/projects", { name, description });
+    setError("");
+    if (!audioFile) {
+      setError("创建项目必须上传音轨。");
+      return;
+    }
+    const form = new FormData();
+    form.append("name", name);
+    form.append("description", description);
+    form.append("audio", audioFile);
+    await api.post("/admin/projects", form);
     setName("");
     setDescription("");
+    setAudioFile(null);
     await reload();
   };
 
   return (
     <main className="page-grid">
-      {isAdmin && (
+      {isOwner && (
         <form className="create-project" onSubmit={createProject}>
           <h2>创建项目</h2>
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder="项目名称" required />
           <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="项目说明" />
+          <label className="file-field">
+            <Music size={17} />
+            <span>{audioFile ? audioFile.name : "上传项目音轨"}</span>
+            <input
+              type="file"
+              accept="audio/*"
+              required
+              onChange={(event: ChangeEvent<HTMLInputElement>) => setAudioFile(event.target.files?.[0] ?? null)}
+            />
+          </label>
+          {error && <p className="form-error">{error}</p>}
           <button className="primary-button">
             <FolderPlus size={18} />
-            新建
+            创建并上传音轨
           </button>
         </form>
       )}
