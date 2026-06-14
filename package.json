@@ -1,0 +1,25 @@
+{
+  "name": "storyboard-collab-suite",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c cyan,magenta \"npm run dev -w apps/backend\" \"npm run dev -w apps/frontend\"",
+    "build": "npm run build -w packages/shared && npm run build -w apps/backend && npm run build -w apps/frontend",
+    "start": "npm run start -w apps/backend",
+    "prisma:generate": "npm run prisma:generate -w apps/backend",
+    "prisma:migrate": "npm run prisma:migrate -w apps/backend",
+    "seed": "npm run seed -w apps/backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  }
+}
