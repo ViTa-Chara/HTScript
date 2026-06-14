@@ -16,6 +16,12 @@
   --panel: rgba(6, 16, 29, 0.92);
   --muted: #7ea7c9;
   --danger: #ff5470;
+  --shot-1: #bde4ff;
+  --shot-2: #6dd6ff;
+  --shot-3: #77f7d2;
+  --shot-4: #a9b8ff;
+  --shot-5: #f2d16b;
+  --shot-6: #ff9fd2;
 }
 
 * {
@@ -26,6 +32,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  animation: matrix-pan 14s linear infinite;
   background:
     linear-gradient(90deg, rgba(40, 165, 255, 0.08) 1px, transparent 1px) 0 0 / 20px 20px,
     linear-gradient(0deg, rgba(40, 165, 255, 0.08) 1px, transparent 1px) 0 0 / 20px 20px,
@@ -42,6 +49,21 @@ select {
 
 button {
   cursor: pointer;
+}
+
+@keyframes matrix-pan {
+  from { background-position: 0 0, 0 0, center; }
+  to { background-position: 20px 20px, 20px 20px, center; }
+}
+
+@keyframes scan-glow {
+  0%, 100% { opacity: 0.22; transform: translateX(-18%); }
+  50% { opacity: 0.78; transform: translateX(18%); }
+}
+
+@keyframes enter-pixel {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 button:disabled {
@@ -201,6 +223,15 @@ textarea {
   border: 1px solid var(--line);
   font-weight: 900;
   text-transform: uppercase;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.primary-button:hover,
+.secondary-button:hover,
+.icon-button:hover,
+.tool:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 rgba(40, 165, 255, 0.28);
 }
 
 .primary-button {
@@ -355,6 +386,7 @@ textarea {
   background:
     linear-gradient(90deg, rgba(40, 165, 255, 0.06) 1px, transparent 1px) 0 0 / 12px 12px,
     rgba(6, 16, 29, 0.82);
+  animation: enter-pixel 220ms ease both;
 }
 
 .project-card h3,
@@ -426,7 +458,7 @@ textarea {
 .editor-shell {
   height: calc(100vh - 58px);
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: clamp(172px, 15vw, 220px) minmax(0, 1fr);
   overflow: hidden;
   background: var(--black);
 }
@@ -484,7 +516,7 @@ textarea {
 .editor-main {
   min-width: 0;
   display: grid;
-  grid-template-rows: 54px minmax(0, 1fr) 236px;
+  grid-template-rows: auto minmax(0, 1fr) clamp(198px, 24vh, 260px);
 }
 
 .tool-bar {
@@ -496,6 +528,7 @@ textarea {
   color: var(--sky-2);
   background: rgba(2, 7, 13, 0.96);
   overflow-x: auto;
+  min-height: 54px;
 }
 
 .tool-bar > strong {
@@ -544,7 +577,7 @@ textarea {
 .canvas-zone {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 318px;
+  grid-template-columns: minmax(0, 1fr) clamp(260px, 24vw, 332px);
   gap: 12px;
   padding: 12px;
   background:
@@ -728,6 +761,15 @@ textarea {
   overflow: hidden;
 }
 
+.timeline-track::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(189, 228, 255, 0.12), transparent);
+  animation: scan-glow 3.2s ease-in-out infinite;
+}
+
 .timeline-playhead {
   position: absolute;
   top: 0;
@@ -755,17 +797,25 @@ textarea {
   top: 22px;
   bottom: 16px;
   min-width: 54px;
-  border: 1px solid var(--sky);
+  border: 1px solid var(--clip-color, var(--sky));
   display: grid;
   align-content: center;
   gap: 4px;
   padding: 0 10px;
   overflow: hidden;
-  background: rgba(189, 228, 255, 0.16);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--clip-color, var(--sky)) 32%, transparent), transparent),
+    rgba(189, 228, 255, 0.08);
   color: var(--sky-2);
   font-size: 12px;
   font-weight: 900;
   text-align: left;
+  z-index: 2;
+  transition: transform 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.timeline-clip:hover {
+  transform: translateY(-2px);
 }
 
 .timeline-clip strong,
@@ -785,8 +835,9 @@ textarea {
 
 .timeline-clip.active {
   color: #02070d;
-  background: var(--sky);
-  border-color: var(--sky);
+  background: var(--clip-color, var(--sky));
+  border-color: var(--clip-color, var(--sky));
+  box-shadow: 4px 4px 0 rgba(40, 165, 255, 0.22);
 }
 
 .timeline-clip.active span {
@@ -824,10 +875,39 @@ textarea {
   }
 
   .editor-main {
-    grid-template-rows: auto minmax(520px, 1fr) auto;
+    grid-template-rows: auto minmax(420px, 1fr) auto;
   }
 
   .inspector {
     max-height: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .transport {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .transport audio,
+  .time-readout {
+    flex: 1 1 100%;
+  }
+
+  .timeline-ruler span:nth-child(even) {
+    display: none;
+  }
+
+  .tool-bar {
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  body,
+  .timeline-track::after {
+    animation: none !important;
+    transition: none !important;
   }
 }

@@ -144,21 +144,24 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
   const timelineTrackRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
-  const selectedNodeRef = useRef<Konva.Node | null>(null);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const playbackBaseMsRef = useRef(0);
   const suppressAudioEventRef = useRef(false);
 
+  const orderedFrames = useMemo(
+    () => [...document.frames].sort((a, b) => a.startMs - b.startMs),
+    [document.frames]
+  );
   const activeFrame = useMemo(
-    () => document.frames.find((frame) => frame.id === activeFrameId) ?? document.frames[0],
-    [document.frames, activeFrameId]
+    () => orderedFrames.find((frame) => frame.id === activeFrameId) ?? orderedFrames[0],
+    [orderedFrames, activeFrameId]
   );
   const selectedElement = useMemo(
     () => activeFrame?.elements.find((element) => element.id === selectedElementId) ?? null,
     [activeFrame?.elements, selectedElementId]
   );
 
-  const duration = Math.max(10000, ...document.frames.map((frame) => frame.endMs));
+  const duration = Math.max(10000, ...orderedFrames.map((frame) => frame.endMs));
   const canvasScale = Math.min(stageSize.width / CANVAS_WIDTH, stageSize.height / CANVAS_HEIGHT);
   const stageWidth = Math.round(CANVAS_WIDTH * canvasScale);
   const stageHeight = Math.round(CANVAS_HEIGHT * canvasScale);
@@ -272,11 +275,11 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
   }, [playing, duration, playbackStartedAt]);
 
   useEffect(() => {
-    const frameAtPlayhead = document.frames.find((frame) => currentMs >= frame.startMs && currentMs < frame.endMs);
+    const frameAtPlayhead = orderedFrames.find((frame) => currentMs >= frame.startMs && currentMs < frame.endMs);
     if (frameAtPlayhead && frameAtPlayhead.id !== activeFrameId && playing) {
       setActiveFrameId(frameAtPlayhead.id);
     }
-  }, [currentMs, document.frames, playing, activeFrameId]);
+  }, [currentMs, orderedFrames, playing, activeFrameId]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -292,13 +295,14 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
 
   useEffect(() => {
     if (!transformerRef.current) return;
-    if (selectedNodeRef.current) {
-      transformerRef.current.nodes([selectedNodeRef.current]);
+    const node = selectedElementId ? stageRef.current?.findOne(`#${selectedElementId}`) : null;
+    if (node) {
+      transformerRef.current.nodes([node]);
     } else {
       transformerRef.current.nodes([]);
     }
     transformerRef.current.getLayer()?.batchDraw();
-  }, [selectedElementId, activeFrame?.elements]);
+  }, [selectedElementId, activeFrame?.elements, activeFrameId]);
 
   const refreshHistory = async () => {
     const [versionsResponse, changesResponse] = await Promise.all([
@@ -327,10 +331,18 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
     if (realtime) socketRef.current?.emit("project:patch", { projectId, document: next, summary });
   };
 
+  const withAutoEnds = (frames: StoryboardFrame[]) => {
+    const sorted = [...frames].sort((a, b) => a.startMs - b.startMs);
+    return sorted.map((frame, index) => ({
+      ...frame,
+      endMs: sorted[index + 1]?.startMs ?? duration
+    }));
+  };
+
   const updateFrame = (frame: StoryboardFrame, summary = "Updated frame") => {
     const next = {
       ...document,
-      frames: document.frames.map((item) => (item.id === frame.id ? frame : item)).sort((a, b) => a.startMs - b.startMs)
+      frames: withAutoEnds(document.frames.map((item) => (item.id === frame.id ? frame : item)))
     };
     commitDocument(next, summary);
   };
@@ -444,7 +456,6 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
     if (!activeFrame) return;
     if (activeTool === "select") {
       if (event.target === event.target.getStage() || event.target.name() === "canvas-background") {
-        selectedNodeRef.current = null;
         setSelectedElementId(null);
       }
       return;
@@ -487,17 +498,23 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
   };
 
   const addFrame = () => {
-    const byPlayhead = Math.round(currentMs);
-    const startMs = Math.max(activeFrame ? activeFrame.endMs : 0, byPlayhead);
+    const startMs = clamp(Math.round(currentMs), 0, duration - 1);
+    const sourceFrame =
+      orderedFrames.find((frame) => startMs >= frame.startMs && startMs < frame.endMs) ??
+      orderedFrames[orderedFrames.length - 1];
+    if (sourceFrame && Math.abs(sourceFrame.startMs - startMs) < 1) {
+      setActiveFrameId(sourceFrame.id);
+      return;
+    }
     const frame: StoryboardFrame = {
       id: uid("frame"),
       startMs,
-      endMs: startMs + 3000,
-      title: `Shot ${document.frames.length + 1}`,
-      notes: "",
-      elements: []
+      endMs: duration,
+      title: `Shot ${orderedFrames.length + 1}`,
+      notes: sourceFrame?.notes ?? "",
+      elements: sourceFrame ? structuredClone(sourceFrame.elements) : []
     };
-    commitDocument({ ...document, frames: [...document.frames, frame].sort((a, b) => a.startMs - b.startMs) }, "Created frame");
+    commitDocument({ ...document, frames: withAutoEnds([...document.frames, frame]) }, "Created frame from playhead");
     setActiveFrameId(frame.id);
     setCurrentMs(frame.startMs);
     broadcastPlayback(false, frame.startMs);
@@ -505,7 +522,7 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
 
   const deleteFrame = () => {
     if (!activeFrame || document.frames.length === 1) return;
-    const frames = document.frames.filter((frame) => frame.id !== activeFrame.id);
+    const frames = withAutoEnds(document.frames.filter((frame) => frame.id !== activeFrame.id));
     commitDocument({ ...document, frames }, "Deleted frame");
     setActiveFrameId(frames[0].id);
     setCurrentMs(frames[0].startMs);
@@ -544,18 +561,14 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
       elements: activeFrame.elements.filter((element) => element.id !== selectedElementId)
     }, "Deleted element");
     setSelectedElementId(null);
-    selectedNodeRef.current = null;
   };
 
   const activeFramePatch = (patch: Partial<StoryboardFrame>) => {
     if (!activeFrame) return;
     const next = { ...activeFrame, ...patch };
-    if (patch.startMs !== undefined && patch.endMs === undefined && next.endMs <= next.startMs) {
-      next.endMs = next.startMs + 3000;
-    }
-    if (patch.endMs !== undefined && next.endMs <= next.startMs) {
-      next.endMs = next.startMs + 1;
-    }
+    const previous = orderedFrames.filter((frame) => frame.id !== activeFrame.id && frame.startMs < next.startMs).at(-1);
+    const following = orderedFrames.find((frame) => frame.id !== activeFrame.id && frame.startMs > next.startMs);
+    next.startMs = clamp(next.startMs, (previous?.startMs ?? -1) + 1, (following?.startMs ?? duration + 1) - 1);
     updateFrame(next, "Updated timing");
   };
 
@@ -581,7 +594,7 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
     playbackBaseMsRef.current = safe;
     setCurrentMs(safe);
     setPlaybackStartedAt(Date.now());
-    const frame = document.frames.find((item) => safe >= item.startMs && safe < item.endMs);
+    const frame = orderedFrames.find((item) => safe >= item.startMs && safe < item.endMs);
     if (frame) setActiveFrameId(frame.id);
     if (audioRef.current) audioRef.current.currentTime = safe / 1000;
     broadcastPlayback(keepPlaying, safe);
@@ -703,9 +716,8 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
                     key={element.id}
                     element={element}
                     selected={selectedElementId === element.id}
-                    onSelect={(node) => {
+                    onSelect={() => {
                       if (activeTool !== "select") return;
-                      selectedNodeRef.current = node;
                       setSelectedElementId(element.id);
                     }}
                     onChange={updateElement}
@@ -732,7 +744,7 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
             <label>标题<input value={activeFrame.title} onChange={(event) => activeFramePatch({ title: event.target.value })} /></label>
             <div className="inspector-grid">
               <label>开始 ms<input type="number" value={activeFrame.startMs} onChange={(event) => activeFramePatch({ startMs: Number(event.target.value) })} /></label>
-              <label>结束 ms<input type="number" value={activeFrame.endMs} onChange={(event) => activeFramePatch({ endMs: Number(event.target.value) })} /></label>
+              <label>结束 ms<input type="number" value={activeFrame.endMs} readOnly /></label>
             </div>
             <label>备注<textarea value={activeFrame.notes} onChange={(event) => activeFramePatch({ notes: event.target.value })} /></label>
             {selectedElement && (
@@ -802,13 +814,14 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
             </div>
             <div className="timeline-track" ref={timelineTrackRef} onClick={seekFromTimeline}>
               <div className="timeline-playhead" style={{ left: `${playheadPercent}%` }} />
-              {document.frames.map((frame) => (
+              {orderedFrames.map((frame, index) => (
                 <button
                   key={frame.id}
                   className={frame.id === activeFrame.id ? "timeline-clip active" : "timeline-clip"}
                   style={{
                     left: `${(frame.startMs / duration) * 100}%`,
-                    width: `${Math.max(3, ((frame.endMs - frame.startMs) / duration) * 100)}%`
+                    width: `${Math.max(3, ((frame.endMs - frame.startMs) / duration) * 100)}%`,
+                    "--clip-color": `var(--shot-${(index % 6) + 1})`
                   } as CSSProperties}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -847,6 +860,10 @@ function StoryboardNode({
     rotation: element.rotation ?? 0,
     opacity: element.opacity ?? 1,
     draggable: true,
+    dragBoundFunc: (pos: Konva.Vector2d) => ({
+      x: clamp(pos.x, -20, CANVAS_WIDTH - 20),
+      y: clamp(pos.y, -20, CANVAS_HEIGHT - 20)
+    }),
     onClick: (event: Konva.KonvaEventObject<MouseEvent>) => onSelect(event.target),
     onTap: (event: Konva.KonvaEventObject<TouchEvent>) => onSelect(event.target),
     onDragEnd: (event: Konva.KonvaEventObject<DragEvent>) => onChange({ ...element, x: event.target.x(), y: event.target.y() }),
