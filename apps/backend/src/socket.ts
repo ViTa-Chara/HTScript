@@ -14,7 +14,15 @@ type SocketUser = {
   role: "USER" | "ADMIN" | "OWNER";
 };
 
+type PlaybackState = {
+  playing: boolean;
+  currentMs: number;
+  startedAt: number;
+  updatedBy?: string;
+};
+
 const projectPresence = new Map<string, Map<string, SocketUser>>();
+const projectPlayback = new Map<string, PlaybackState>();
 
 export function createSocketServer(server: Server) {
   const io = new SocketServer(server, {
@@ -58,6 +66,7 @@ export function createSocketServer(server: Server) {
       projectPresence.set(projectId, presence);
       io.to(`project:${projectId}`).emit("presence:update", Array.from(presence.values()));
       socket.emit("project:document", project.document);
+      socket.emit("project:playback", projectPlayback.get(projectId) ?? { playing: false, currentMs: 0, startedAt: Date.now() });
     });
 
     socket.on("project:patch", async ({ projectId, document, summary }: { projectId: string; document: StoryboardDocument; summary?: string }) => {
@@ -81,6 +90,26 @@ export function createSocketServer(server: Server) {
         }
       });
       socket.to(`project:${projectId}`).emit("project:document", document);
+    });
+
+    socket.on("project:playback", async ({ projectId, playing, currentMs, startedAt }: PlaybackState & { projectId: string }) => {
+      const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        include: { members: { where: { userId: user.id } } }
+      });
+      if (!project) return;
+      if (!["ADMIN", "OWNER"].includes(user.role) && project.createdById !== user.id && project.members.length === 0) {
+        return socket.emit("error:message", "无权访问项目");
+      }
+
+      const state: PlaybackState = {
+        playing: Boolean(playing),
+        currentMs: Math.max(0, Math.round(Number(currentMs) || 0)),
+        startedAt: Math.round(Number(startedAt) || Date.now()),
+        updatedBy: user.displayName
+      };
+      projectPlayback.set(projectId, state);
+      io.to(`project:${projectId}`).emit("project:playback", state);
     });
 
     socket.on("disconnect", () => {
