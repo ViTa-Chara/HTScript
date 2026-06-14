@@ -39,7 +39,7 @@ const tools: Array<{ id: StoryboardTool; label: string; icon: React.ElementType 
 ];
 
 const defaultDocument: StoryboardDocument = {
-  canvas: { width: 1280, height: 720, background: "#f8fafc" },
+  canvas: { width: 1280, height: 720, background: "#f8fbff" },
   frames: []
 };
 
@@ -55,6 +55,26 @@ function firstFrame(): StoryboardFrame {
     title: "Opening shot",
     notes: "",
     elements: []
+  };
+}
+
+function ensureDocument(value: unknown): StoryboardDocument {
+  const incoming = (value && typeof value === "object" ? value : defaultDocument) as Partial<StoryboardDocument>;
+  const canvas = incoming.canvas ?? defaultDocument.canvas;
+  const frames = Array.isArray(incoming.frames) && incoming.frames.length > 0 ? incoming.frames : [firstFrame()];
+
+  return {
+    canvas: {
+      width: canvas.width ?? defaultDocument.canvas.width,
+      height: canvas.height ?? defaultDocument.canvas.height,
+      background: canvas.background ?? defaultDocument.canvas.background
+    },
+    frames: frames.map((frame) => ({
+      ...frame,
+      title: frame.title || "Untitled shot",
+      notes: frame.notes ?? "",
+      elements: Array.isArray(frame.elements) ? frame.elements : []
+    }))
   };
 }
 
@@ -75,6 +95,8 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
   const [history, setHistory] = useState<StoryboardDocument[]>([]);
   const [redoStack, setRedoStack] = useState<StoryboardDocument[]>([]);
   const [playing, setPlaying] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const socketRef = useRef<Socket | null>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
@@ -88,18 +110,26 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
   const duration = Math.max(10000, ...document.frames.map((frame) => frame.endMs));
 
   const load = async () => {
-    const [{ data: projectData }, versionsResponse, changesResponse] = await Promise.all([
-      api.get(`/projects/${projectId}`),
-      api.get(`/projects/${projectId}/versions`),
-      api.get(`/projects/${projectId}/changes`)
-    ]);
-    const incoming = (projectData.project.document ?? defaultDocument) as StoryboardDocument;
-    const ensured = incoming.frames?.length ? incoming : { ...incoming, frames: [firstFrame()] };
-    setProject(projectData.project);
-    setDocument(ensured);
-    setActiveFrameId(ensured.frames[0]?.id ?? "");
-    setVersions(versionsResponse.data.versions);
-    setChanges(changesResponse.data.changes);
+    setLoading(true);
+    setLoadError("");
+    try {
+      const { data: projectData } = await api.get(`/projects/${projectId}`);
+      const ensured = ensureDocument(projectData.project.document);
+      setProject(projectData.project);
+      setDocument(ensured);
+      setActiveFrameId((current) => current || ensured.frames[0]?.id || "");
+
+      const [versionsResponse, changesResponse] = await Promise.allSettled([
+        api.get(`/projects/${projectId}/versions`),
+        api.get(`/projects/${projectId}/changes`)
+      ]);
+      if (versionsResponse.status === "fulfilled") setVersions(versionsResponse.value.data.versions);
+      if (changesResponse.status === "fulfilled") setChanges(changesResponse.value.data.changes);
+    } catch (error: any) {
+      setLoadError(error.response?.data?.message ?? "编辑器加载失败，请检查项目权限或后端接口。");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -113,10 +143,15 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
     socket.emit("project:join", { projectId });
     socket.on("presence:update", setPresence);
     socket.on("project:document", (incoming: StoryboardDocument) => {
-      if (!incoming?.frames) return;
-      setDocument(incoming);
-      setActiveFrameId((current) => current || incoming.frames[0]?.id || "");
+      const ensured = ensureDocument(incoming);
+      setDocument(ensured);
+      setActiveFrameId((current) => {
+        if (current && ensured.frames.some((frame) => frame.id === current)) return current;
+        return ensured.frames[0]?.id || "";
+      });
     });
+    socket.on("connect_error", (error) => setLoadError(`实时连接失败：${error.message}`));
+    socket.on("error:message", (message: string) => setLoadError(message));
     return () => {
       socket.disconnect();
     };
@@ -296,7 +331,9 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
 
   const rollback = async (versionId: string) => {
     const { data } = await api.post(`/projects/${projectId}/rollback/${versionId}`);
-    setDocument(data.project.document);
+    const ensured = ensureDocument(data.project.document);
+    setDocument(ensured);
+    setActiveFrameId(ensured.frames[0]?.id ?? "");
     await refreshHistory();
   };
 
@@ -323,7 +360,20 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
     updateFrame({ ...activeFrame, ...patch }, "Updated timing");
   };
 
-  if (!project || !activeFrame) return <div className="app-loading">加载编辑器...</div>;
+  if (loadError) {
+    return (
+      <div className="editor-error">
+        <div>
+          <h2>编辑器没有加载成功</h2>
+          <p>{loadError}</p>
+          <button className="primary-button" onClick={load}>重试</button>
+          <button className="secondary-button" onClick={onBack}>返回项目</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading || !project || !activeFrame) return <div className="app-loading">加载编辑器...</div>;
 
   const scale = 0.66;
 

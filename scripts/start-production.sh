@@ -10,6 +10,11 @@ if [[ ! -f apps/backend/.env ]]; then
   exit 1
 fi
 
+if [[ ! -d apps/backend/prisma/migrations ]]; then
+  echo "Missing apps/backend/prisma/migrations. Sync the latest code before deploying."
+  exit 1
+fi
+
 npm ci
 npm run prisma:generate
 npm run prisma:deploy

@@ -5,9 +5,18 @@ export const emptyDocument = (): StoryboardDocument => ({
   canvas: {
     width: 1280,
     height: 720,
-    background: "#f8fafc"
+    background: "#f8fbff"
   },
-  frames: []
+  frames: [
+    {
+      id: "frame_opening",
+      startMs: 0,
+      endMs: 3000,
+      title: "Opening shot",
+      notes: "",
+      elements: []
+    }
+  ]
 });
 
 export const normalizeFrame = (frame: StoryboardFrame): StoryboardFrame => ({
